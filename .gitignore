@@ -1,0 +1,28 @@
+# Build artifacts
+bin/
+obj/
+TestResults/
+*.dll
+*.exe
+*.pdb
+*.mdb
+*.xml
+!SpriggullYeeter.csproj
+!SpriggullYeeter.Core.csproj
+!SpriggullYeeter.Tests.csproj
+
+# IDE & user files
+.vs/
+.idea/
+.vscode/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Logs & MelonLoader runtime outputs
+*.log
+Latest.log
+MelonPreferences.cfg
+UserData/
+Mods/
