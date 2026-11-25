@@ -1,16 +1,15 @@
-using System;
 using HarmonyLib;
-using UnityEngine;
 using UnityEngine.XR;
 
 namespace SpriggullYeeter.Input
 {
     /// <summary>
-    /// Reads VR grip state, empty-hand availability, hand world anchors, and haptic triggers safely.
+    /// Reads VR grip state across ATT's native ControllerInput, replicated HandGestureController,
+    /// and Unity XR InputDevices, plus empty-hand availability and haptic feedback.
     /// </summary>
     internal static class VrHandInputReader
     {
-        private const float GripAxisThreshold = 0.70f;
+        private const float GripAxisThreshold = 0.55f;
 
         private static readonly AccessTools.FieldRef<HandGestureController, float> GripAxisRef =
             CreateGripAxisFieldRef();
@@ -27,7 +26,7 @@ namespace SpriggullYeeter.Input
             }
         }
 
-        public static Transform GetHandAnchor(Controller controller)
+        public static UnityEngine.Transform GetHandAnchor(Controller controller)
         {
             if (controller == null)
                 return null;
@@ -43,10 +42,7 @@ namespace SpriggullYeeter.Input
             try
             {
                 Interactor interactor = controller.Interactor;
-                if (interactor == null)
-                    return false;
-
-                if (interactor.IsInteracting || interactor.InteractingWith != null)
+                if (interactor != null && (interactor.IsInteracting || interactor.InteractingWith != null))
                     return false;
 
                 if (controller.TryGetHeldPickup(out Pickup heldPickup) && heldPickup != null)
@@ -65,13 +61,19 @@ namespace SpriggullYeeter.Input
             if (player == null || controller == null)
                 return false;
 
-            if (player.IsLocalPlayer)
-            {
-                if (TryReadLocalXrGrip(isLeftHand ? XRNode.LeftHand : XRNode.RightHand, out bool xrPressed))
-                    return xrPressed;
-            }
+            // 1. ATT native ControllerInput (works cleanly with SteamVR/OpenVR, Oculus, and custom bindings)
+            if (TryReadControllerInputGrip(controller))
+                return true;
 
-            return TryReadGestureGrip(controller);
+            // 2. ATT replicated HandGestureController.gripAxis (works on both client and server)
+            if (TryReadGestureGrip(controller))
+                return true;
+
+            // 3. Unity XR InputDevices fallback for local VR player
+            if (player.IsLocalPlayer && TryReadLocalXrGrip(isLeftHand ? XRNode.LeftHand : XRNode.RightHand))
+                return true;
+
+            return false;
         }
 
         public static void TryPulseHaptic(
@@ -94,33 +96,49 @@ namespace SpriggullYeeter.Input
             }
         }
 
-        private static bool TryReadLocalXrGrip(XRNode node, out bool pressed)
+        private static bool TryReadControllerInputGrip(Controller controller)
         {
-            pressed = false;
+            try
+            {
+                PlayerInput playerInput = controller.PlayerInput;
+                ControllerInput raw = playerInput != null ? playerInput.RawInput : null;
+                if (raw == null)
+                    return false;
+
+                if (raw.Grab != null && raw.Grab.State)
+                    return true;
+
+                if (raw.HardGrab != null && raw.HardGrab.State)
+                    return true;
+
+                if (raw.GrabAxis >= GripAxisThreshold || raw.GrabStrength >= GripAxisThreshold)
+                    return true;
+            }
+            catch
+            {
+                // Ignore and fall back to gesture/XR reads.
+            }
+
+            return false;
+        }
+
+        private static bool TryReadLocalXrGrip(XRNode node)
+        {
             try
             {
                 InputDevice device = InputDevices.GetDeviceAtXRNode(node);
                 if (!device.isValid)
                     return false;
 
-                if (device.TryGetFeatureValue(CommonUsages.gripButton, out bool buttonDown))
-                {
-                    if (buttonDown)
-                    {
-                        pressed = true;
-                        return true;
-                    }
-                }
-
-                if (device.TryGetFeatureValue(CommonUsages.grip, out float gripValue))
-                {
-                    pressed = gripValue >= GripAxisThreshold;
+                if (device.TryGetFeatureValue(CommonUsages.gripButton, out bool buttonDown) && buttonDown)
                     return true;
-                }
+
+                if (device.TryGetFeatureValue(CommonUsages.grip, out float gripValue) && gripValue >= GripAxisThreshold)
+                    return true;
             }
             catch
             {
-                // Fall back to HandGestureController if XR subsystem query fails.
+                // Ignore if XR subsystem query fails.
             }
 
             return false;

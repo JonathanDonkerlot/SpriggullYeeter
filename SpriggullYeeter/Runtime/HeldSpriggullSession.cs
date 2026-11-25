@@ -4,7 +4,6 @@ using Alta.Intelligence;
 using Alta.Networking;
 using Alta.Pathfinding;
 using HarmonyLib;
-using RagdollLib.API;
 using SpriggullYeeter.Feedback;
 using SpriggullYeeter.Input;
 using UnityEngine;
@@ -110,11 +109,6 @@ namespace SpriggullYeeter.Runtime
             _holdStartTime = Time.unscaledTime;
             _nextSquawkTime = _holdStartTime + 0.15f;
             _nextHapticTime = _holdStartTime;
-
-            if (RagdollAPI.IsRagdolled(SpriggullRoot.transform))
-            {
-                RagdollAPI.RecoverRagdoll(SpriggullRoot.transform);
-            }
 
             SuspendForCarry();
 

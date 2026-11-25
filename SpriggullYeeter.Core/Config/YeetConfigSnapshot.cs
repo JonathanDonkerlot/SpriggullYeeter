@@ -16,8 +16,8 @@ namespace SpriggullYeeter.Core.Config
         public bool EnableDebugLogging { get; }
 
         public YeetConfigSnapshot(
-            bool requireTwoHands = true,
-            float grabRadius = 0.40f,
+            bool requireTwoHands = false,
+            float grabRadius = 0.60f,
             float maxHandSeparation = 1.10f,
             float yeetForceMultiplier = 1.60f,
             float ragdollDurationSeconds = 3.50f,

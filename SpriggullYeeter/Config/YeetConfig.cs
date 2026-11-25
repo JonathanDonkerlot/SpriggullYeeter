@@ -27,12 +27,12 @@ namespace SpriggullYeeter.Config
 
             _requireTwoHands = _category.CreateEntry(
                 "RequireTwoHands",
-                true,
-                description: "Require both VR hands gripping simultaneously to grab a Spriggull (false allows single-hand grab).");
+                false,
+                description: "Require both VR hands gripping simultaneously to grab a Spriggull (false allows 1-hand or 2-hand grabs).");
 
             _grabRadius = _category.CreateEntry(
                 "GrabRadius",
-                0.40f,
+                0.60f,
                 description: "Maximum distance (meters) from hand(s) to a live Spriggull to initiate a grab.");
 
             _maxHandSeparation = _category.CreateEntry(

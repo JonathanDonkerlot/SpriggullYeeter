@@ -48,12 +48,13 @@ Instead, **SpriggullYeeter** uses **proximity + grip + empty-hand validation**:
    - Inspects `Controller.Interactor` (`!IsInteracting && InteractingWith == null`) and `Controller.TryGetHeldPickup(out Pickup held) && held == null`.
    - If the player is already holding a weapon/item or interacting with a dock/lever, that hand cannot grab a Spriggull.
 2. **VR Grip Detection (`VrHandInputReader.IsGripPressed`)**:
-   - **Local VR Player**: Queries `UnityEngine.XR.InputDevices.GetDeviceAtXRNode(XRNode.LeftHand / RightHand)` for `CommonUsages.gripButton` or `CommonUsages.grip >= 0.70f`, falling back to ATT's replicated `HandGestureController.gripAxis >= 0.70f`.
-   - **Remote Server Players**: Reads ATT's replicated `HandGestureController.gripAxis >= 0.70f` via cached Harmony `FieldRefAccess`.
+   - **ATT Native `ControllerInput`**: Reads `Controller.PlayerInput.RawInput` (`Grab.State`, `HardGrab.State`, `GrabAxis >= 0.55f`, `GrabStrength >= 0.55f`) first—working cleanly across SteamVR/OpenVR, Oculus, and custom bindings.
+   - **ATT Replicated `HandGestureController.gripAxis`**: Reads `gripAxis >= 0.55f` via cached Harmony `FieldRefAccess` (works on both client and server).
+   - **Unity XR Fallback**: Queries `UnityEngine.XR.InputDevices.GetDeviceAtXRNode` (`gripButton` / `grip >= 0.55f`) for local VR players.
 3. **Proximity & Target Filtering**:
-   - Computes hand midpoint (when `RequireTwoHands = true`, both hands must be within `GrabRadius`, default `0.4m`, of the same live Spriggull and within `MaxHandSeparation`, default `1.1m`, of each other; when `RequireTwoHands = false`, either empty gripped hand within `GrabRadius` can grab).
-   - Validates `Alta.Intelligence.Spriggull`, `HealthObject.Health > 0f`, not already held by another player, and not currently dead.
-   - If the Spriggull is currently ragdolled (`RagdollAPI.IsRagdolled`), calls `RagdollAPI.RecoverRagdoll` cleanly before transitioning to `Held` so bones are re-parented and ready for carry.
+   - Supports both **1-hand** and **2-hand** grabs by default (`RequireTwoHands = false`, `GrabRadius = 0.60m`); when `RequireTwoHands = true`, both hands must grip within `MaxHandSeparation` (`1.10m`).
+   - Searches all layers (`~0`) including trigger colliders (`QueryTriggerInteraction.Collide`) and measures surface distance via `Collider.ClosestPoint` so touching any part of a live Spriggull grabs cleanly.
+   - Validates `Alta.Intelligence.Spriggull`, `HealthObject.Health > 0f`, not already held by another player, and not already ragdolled (`RagdollAPI.IsRagdolled`). `RagdollLib` is invoked **only** when throwing/yeeting, never when grabbing, carrying, or gently dropping.
 
 ---
 

@@ -17,11 +17,11 @@ namespace SpriggullYeeter.Runtime
 {
     /// <summary>
     /// Per-player VR grab/throw controller sampling left and right hand ring buffers,
-    /// detecting two-handed (or optional single-handed) Spriggull grabs, and launching via RagdollLib.
+    /// detecting 1-hand or 2-hand Spriggull grabs, and invoking RagdollLib only on throws/yeets.
     /// </summary>
     internal sealed class PlayerYeetHandler
     {
-        private const int MaxOverlapColliders = 48;
+        private const int MaxOverlapColliders = 64;
 
         private readonly PlayerController _player;
         private readonly YeetManager _manager;
@@ -34,8 +34,8 @@ namespace SpriggullYeeter.Runtime
         private readonly HashSet<int> _seenCandidateRoots = new HashSet<int>();
 
         private HeldSpriggullSession _heldSession;
-        private bool _usingLeftForSingle;
-        private bool _usingRightForSingle;
+        private bool _holdingLeft;
+        private bool _holdingRight;
 
         public PlayerController Player => _player;
         public int HeldSpriggullId => _heldSession != null ? _heldSession.RootInstanceId : 0;
@@ -96,8 +96,8 @@ namespace SpriggullYeeter.Runtime
                 _heldSession = null;
             }
 
-            _usingLeftForSingle = false;
-            _usingRightForSingle = false;
+            _holdingLeft = false;
+            _holdingRight = false;
 
             if (_stateMachine.State == YeetState.Held)
                 _stateMachine.TryAbortHold(Time.unscaledTime);
@@ -119,16 +119,17 @@ namespace SpriggullYeeter.Runtime
             Transform rightAnchor,
             double now)
         {
+            bool leftReady = leftAnchor != null &&
+                             VrHandInputReader.IsHandEmpty(leftCtrl) &&
+                             VrHandInputReader.IsGripPressed(_player, leftCtrl, isLeftHand: true);
+
+            bool rightReady = rightAnchor != null &&
+                              VrHandInputReader.IsHandEmpty(rightCtrl) &&
+                              VrHandInputReader.IsGripPressed(_player, rightCtrl, isLeftHand: false);
+
             if (cfg.RequireTwoHands)
             {
-                if (leftAnchor == null || rightAnchor == null)
-                    return;
-
-                if (!VrHandInputReader.IsHandEmpty(leftCtrl) || !VrHandInputReader.IsHandEmpty(rightCtrl))
-                    return;
-
-                if (!VrHandInputReader.IsGripPressed(_player, leftCtrl, isLeftHand: true) ||
-                    !VrHandInputReader.IsGripPressed(_player, rightCtrl, isLeftHand: false))
+                if (!leftReady || !rightReady)
                     return;
 
                 float handSep = Vector3.Distance(leftAnchor.position, rightAnchor.position);
@@ -136,53 +137,74 @@ namespace SpriggullYeeter.Runtime
                     return;
 
                 Vector3 midpoint = (leftAnchor.position + rightAnchor.position) * 0.5f;
-                GameObject spriggull = FindNearestSpriggull(midpoint, cfg.GrabRadius, leftAnchor.position, rightAnchor.position, requireBothHandsNear: true, out Spriggull agent, out HealthObject health);
-                if (spriggull == null)
-                    return;
+                GameObject spriggull = FindNearestSpriggull(
+                    midpoint,
+                    cfg.GrabRadius,
+                    leftAnchor.position,
+                    rightAnchor.position,
+                    requireBothHandsNear: true,
+                    out Spriggull agent,
+                    out HealthObject health);
 
-                StartHold(spriggull, agent, health, leftUsed: true, rightUsed: true, now, cfg);
+                if (spriggull != null)
+                    StartHold(spriggull, agent, health, leftUsed: true, rightUsed: true, now, cfg);
+                return;
             }
-            else
+
+            if (!leftReady && !rightReady)
+                return;
+
+            if (leftReady && rightReady && Vector3.Distance(leftAnchor.position, rightAnchor.position) <= cfg.MaxHandSeparation)
             {
-                bool leftReady = leftAnchor != null &&
-                                 VrHandInputReader.IsHandEmpty(leftCtrl) &&
-                                 VrHandInputReader.IsGripPressed(_player, leftCtrl, isLeftHand: true);
+                Vector3 midpoint = (leftAnchor.position + rightAnchor.position) * 0.5f;
+                GameObject spriggull = FindNearestSpriggull(
+                    midpoint,
+                    cfg.GrabRadius,
+                    leftAnchor.position,
+                    rightAnchor.position,
+                    requireBothHandsNear: false,
+                    out Spriggull agent,
+                    out HealthObject health);
 
-                bool rightReady = rightAnchor != null &&
-                                  VrHandInputReader.IsHandEmpty(rightCtrl) &&
-                                  VrHandInputReader.IsGripPressed(_player, rightCtrl, isLeftHand: false);
-
-                if (!leftReady && !rightReady)
+                if (spriggull != null)
+                {
+                    StartHold(spriggull, agent, health, leftUsed: true, rightUsed: true, now, cfg);
                     return;
-
-                if (leftReady && rightReady && Vector3.Distance(leftAnchor.position, rightAnchor.position) <= cfg.MaxHandSeparation)
-                {
-                    Vector3 midpoint = (leftAnchor.position + rightAnchor.position) * 0.5f;
-                    GameObject spriggull = FindNearestSpriggull(midpoint, cfg.GrabRadius, leftAnchor.position, rightAnchor.position, requireBothHandsNear: false, out Spriggull agent, out HealthObject health);
-                    if (spriggull != null)
-                    {
-                        StartHold(spriggull, agent, health, leftUsed: true, rightUsed: true, now, cfg);
-                        return;
-                    }
                 }
+            }
 
-                if (rightReady)
+            if (rightReady)
+            {
+                GameObject spriggull = FindNearestSpriggull(
+                    rightAnchor.position,
+                    cfg.GrabRadius,
+                    rightAnchor.position,
+                    rightAnchor.position,
+                    requireBothHandsNear: false,
+                    out Spriggull agent,
+                    out HealthObject health);
+
+                if (spriggull != null)
                 {
-                    GameObject spriggull = FindNearestSpriggull(rightAnchor.position, cfg.GrabRadius, rightAnchor.position, rightAnchor.position, requireBothHandsNear: false, out Spriggull agent, out HealthObject health);
-                    if (spriggull != null)
-                    {
-                        StartHold(spriggull, agent, health, leftUsed: false, rightUsed: true, now, cfg);
-                        return;
-                    }
+                    StartHold(spriggull, agent, health, leftUsed: false, rightUsed: true, now, cfg);
+                    return;
                 }
+            }
 
-                if (leftReady)
+            if (leftReady)
+            {
+                GameObject spriggull = FindNearestSpriggull(
+                    leftAnchor.position,
+                    cfg.GrabRadius,
+                    leftAnchor.position,
+                    leftAnchor.position,
+                    requireBothHandsNear: false,
+                    out Spriggull agent,
+                    out HealthObject health);
+
+                if (spriggull != null)
                 {
-                    GameObject spriggull = FindNearestSpriggull(leftAnchor.position, cfg.GrabRadius, leftAnchor.position, leftAnchor.position, requireBothHandsNear: false, out Spriggull agent, out HealthObject health);
-                    if (spriggull != null)
-                    {
-                        StartHold(spriggull, agent, health, leftUsed: true, rightUsed: false, now, cfg);
-                    }
+                    StartHold(spriggull, agent, health, leftUsed: true, rightUsed: false, now, cfg);
                 }
             }
         }
@@ -199,14 +221,14 @@ namespace SpriggullYeeter.Runtime
             if (!_stateMachine.TryBeginHold(now))
                 return;
 
-            _usingLeftForSingle = leftUsed;
-            _usingRightForSingle = rightUsed;
+            _holdingLeft = leftUsed;
+            _holdingRight = rightUsed;
             _heldSession = new HeldSpriggullSession(spriggullRoot, _player, agent, health);
             _heldSession.BeginHold();
 
             if (cfg.EnableDebugLogging)
             {
-                _log?.Msg($"[SpriggullYeeter] '{_player.name}' grabbed '{spriggullRoot.name}' (TwoHands={leftUsed && rightUsed}).");
+                _log?.Msg($"[SpriggullYeeter] '{_player.name}' grabbed '{spriggullRoot.name}' (Left={leftUsed}, Right={rightUsed}).");
             }
         }
 
@@ -224,15 +246,13 @@ namespace SpriggullYeeter.Runtime
                 return;
             }
 
-            bool leftHeld = _usingLeftForSingle &&
-                            leftAnchor != null &&
-                            VrHandInputReader.IsHandEmpty(leftCtrl) &&
-                            VrHandInputReader.IsGripPressed(_player, leftCtrl, isLeftHand: true);
+            bool leftGripping = leftAnchor != null &&
+                                VrHandInputReader.IsHandEmpty(leftCtrl) &&
+                                VrHandInputReader.IsGripPressed(_player, leftCtrl, isLeftHand: true);
 
-            bool rightHeld = _usingRightForSingle &&
-                             rightAnchor != null &&
-                             VrHandInputReader.IsHandEmpty(rightCtrl) &&
-                             VrHandInputReader.IsGripPressed(_player, rightCtrl, isLeftHand: false);
+            bool rightGripping = rightAnchor != null &&
+                                 VrHandInputReader.IsHandEmpty(rightCtrl) &&
+                                 VrHandInputReader.IsGripPressed(_player, rightCtrl, isLeftHand: false);
 
             if (cfg.RequireTwoHands)
             {
@@ -251,9 +271,9 @@ namespace SpriggullYeeter.Runtime
                     return;
                 }
 
-                if (!leftHeld || !rightHeld)
+                if (!leftGripping || !rightGripping)
                 {
-                    ReleaseAndLaunch(cfg, leftAnchor.position, rightAnchor.position, useLeft: true, useRight: true, now);
+                    ReleaseAndMaybeYeet(cfg, leftAnchor.position, rightAnchor.position, useLeft: true, useRight: true, now);
                     return;
                 }
 
@@ -261,60 +281,64 @@ namespace SpriggullYeeter.Runtime
                 Vector3 rightAxis = rightAnchor.position - leftAnchor.position;
                 Vector3 playerFwd = _player.Head != null ? _player.Head.forward : _player.transform.forward;
                 _heldSession.UpdateCarriedPose(midpoint, rightAxis, playerFwd);
+                return;
             }
-            else
+
+            // 1-hand mode: seamlessly join second hand if brought within GrabRadius while gripping
+            Vector3 spriggullPos = _heldSession.SpriggullRoot.transform.position;
+            if (!_holdingLeft && leftGripping && Vector3.Distance(leftAnchor.position, spriggullPos) <= cfg.GrabRadius + 0.25f)
+                _holdingLeft = true;
+            if (!_holdingRight && rightGripping && Vector3.Distance(rightAnchor.position, spriggullPos) <= cfg.GrabRadius + 0.25f)
+                _holdingRight = true;
+
+            bool leftStillHolding = _holdingLeft && leftGripping;
+            bool rightStillHolding = _holdingRight && rightGripping;
+
+            if (leftStillHolding && rightStillHolding && leftAnchor != null && rightAnchor != null)
             {
-                if (_usingLeftForSingle && _usingRightForSingle && leftAnchor != null && rightAnchor != null)
-                {
-                    float handSep = Vector3.Distance(leftAnchor.position, rightAnchor.position);
-                    if (handSep > cfg.MaxHandSeparation)
-                    {
-                        AbortHoldIfActive();
-                        return;
-                    }
-                }
-
-                if (!leftHeld && !rightHeld)
-                {
-                    Vector3 lPos = leftAnchor != null ? leftAnchor.position : _heldSession.SpriggullRoot.transform.position;
-                    Vector3 rPos = rightAnchor != null ? rightAnchor.position : lPos;
-                    ReleaseAndLaunch(cfg, lPos, rPos, _usingLeftForSingle, _usingRightForSingle, now);
-                    return;
-                }
-
-                _usingLeftForSingle = leftHeld;
-                _usingRightForSingle = rightHeld;
-
-                Vector3 carryPos;
-                Vector3 rightAxis;
-                Vector3 playerFwd = _player.Head != null ? _player.Head.forward : _player.transform.forward;
-
-                if (leftHeld && rightHeld && leftAnchor != null && rightAnchor != null)
-                {
-                    carryPos = (leftAnchor.position + rightAnchor.position) * 0.5f;
-                    rightAxis = rightAnchor.position - leftAnchor.position;
-                }
-                else if (rightHeld && rightAnchor != null)
-                {
-                    carryPos = rightAnchor.position + (rightAnchor.forward * 0.12f);
-                    rightAxis = rightAnchor.right;
-                }
-                else if (leftAnchor != null)
-                {
-                    carryPos = leftAnchor.position + (leftAnchor.forward * 0.12f);
-                    rightAxis = leftAnchor.right;
-                }
-                else
+                float handSep = Vector3.Distance(leftAnchor.position, rightAnchor.position);
+                if (handSep > cfg.MaxHandSeparation)
                 {
                     AbortHoldIfActive();
                     return;
                 }
-
-                _heldSession.UpdateCarriedPose(carryPos, rightAxis, playerFwd);
             }
+
+            if (!leftStillHolding && !rightStillHolding)
+            {
+                Vector3 lPos = leftAnchor != null ? leftAnchor.position : spriggullPos;
+                Vector3 rPos = rightAnchor != null ? rightAnchor.position : lPos;
+                ReleaseAndMaybeYeet(cfg, lPos, rPos, _holdingLeft, _holdingRight, now);
+                return;
+            }
+
+            _holdingLeft = leftStillHolding;
+            _holdingRight = rightStillHolding;
+
+            Vector3 carryPos;
+            Vector3 carryRightAxis;
+            Vector3 headFwd = _player.Head != null ? _player.Head.forward : _player.transform.forward;
+
+            if (leftStillHolding && rightStillHolding)
+            {
+                carryPos = (leftAnchor.position + rightAnchor.position) * 0.5f;
+                carryRightAxis = rightAnchor.position - leftAnchor.position;
+            }
+            else if (rightStillHolding)
+            {
+                carryPos = rightAnchor.position + (rightAnchor.forward * 0.10f);
+                carryRightAxis = rightAnchor.right;
+            }
+            else
+            {
+                carryPos = leftAnchor.position + (leftAnchor.forward * 0.10f);
+                carryRightAxis = leftAnchor.right;
+            }
+
+            _heldSession.UpdateCarriedPose(carryPos, carryRightAxis, headFwd);
         }
 
-        private void ReleaseAndLaunch(
+        private void ReleaseAndMaybeYeet(
             YeetConfigSnapshot cfg,
             Vector3 leftPos,
             Vector3 rightPos,
@@ -324,8 +348,8 @@ namespace SpriggullYeeter.Runtime
         {
             HeldSpriggullSession session = _heldSession;
             _heldSession = null;
-            _usingLeftForSingle = false;
-            _usingRightForSingle = false;
+            _holdingLeft = false;
+            _holdingRight = false;
 
             if (session == null || session.SpriggullRoot == null)
             {
@@ -341,12 +365,13 @@ namespace SpriggullYeeter.Runtime
                 rightVel, useRight,
                 cfg.YeetForceMultiplier);
 
+            // Only invoke RagdollLib when actually throwing/yeeting; gentle drop restores normal AI cleanly.
             if (!YeetPhysicsCalculator.ShouldLaunchAsYeet(throwVel))
             {
                 session.RestorePreHoldState(resetMotion: true);
                 _stateMachine.TryAbortHold(now);
                 if (cfg.EnableDebugLogging)
-                    _log?.Msg($"[SpriggullYeeter] Released '{session.SpriggullRoot.name}' gently (speed={throwVel.Magnitude:F2}m/s).");
+                    _log?.Msg($"[SpriggullYeeter] Released '{session.SpriggullRoot.name}' gently without ragdoll (speed={throwVel.Magnitude:F2}m/s).");
                 return;
             }
 
@@ -411,10 +436,10 @@ namespace SpriggullYeeter.Runtime
 
             int hitCount = Physics.OverlapSphereNonAlloc(
                 searchOrigin,
-                grabRadius + 0.35f,
+                grabRadius + 0.65f,
                 _overlapBuffer,
-                Physics.DefaultRaycastLayers,
-                QueryTriggerInteraction.Ignore);
+                ~0,
+                QueryTriggerInteraction.Collide);
 
             if (hitCount <= 0)
                 return null;
@@ -444,32 +469,34 @@ namespace SpriggullYeeter.Runtime
                 if (_manager.IsSpriggullHeld(rootId))
                     continue;
 
+                // Do not grab an actively ragdolled Spriggull; RagdollLib is reserved for throws/yeets.
+                if (RagdollAPI.IsRagdolled(root.transform))
+                    continue;
+
                 Vector3 targetCenter = ResolveTargetCenter(root, health);
+                float leftDist = MeasureHandToTargetDistance(col, targetCenter, leftHandPos);
+                float rightDist = MeasureHandToTargetDistance(col, targetCenter, rightHandPos);
+                float originDist = MeasureHandToTargetDistance(col, targetCenter, searchOrigin);
+
                 if (requireBothHandsNear)
                 {
-                    float leftDistSqr = (targetCenter - leftHandPos).sqrMagnitude;
-                    float rightDistSqr = (targetCenter - rightHandPos).sqrMagnitude;
-                    if (leftDistSqr > maxRadiusSqr && rightDistSqr > maxRadiusSqr)
-                    {
-                        float midDistSqr = (targetCenter - searchOrigin).sqrMagnitude;
-                        if (midDistSqr > maxRadiusSqr)
-                            continue;
-                    }
-                    else if (leftDistSqr > (maxRadiusSqr * 1.6f) || rightDistSqr > (maxRadiusSqr * 1.6f))
+                    if ((leftDist > grabRadius && rightDist > grabRadius && originDist > grabRadius) ||
+                        leftDist > (grabRadius * 1.35f) ||
+                        rightDist > (grabRadius * 1.35f))
                     {
                         continue;
                     }
                 }
                 else
                 {
-                    if ((targetCenter - searchOrigin).sqrMagnitude > maxRadiusSqr)
+                    if (originDist > grabRadius && (originDist * originDist) > maxRadiusSqr)
                         continue;
                 }
 
-                float centerDistSqr = (targetCenter - searchOrigin).sqrMagnitude;
-                if (centerDistSqr < bestDistSqr)
+                float scoreDistSqr = originDist * originDist;
+                if (scoreDistSqr < bestDistSqr)
                 {
-                    bestDistSqr = centerDistSqr;
+                    bestDistSqr = scoreDistSqr;
                     bestRoot = root;
                     bestAgent = agent;
                     bestHealth = health;
@@ -477,6 +504,24 @@ namespace SpriggullYeeter.Runtime
             }
 
             return bestRoot;
+        }
+
+        private static float MeasureHandToTargetDistance(Collider col, Vector3 targetCenter, Vector3 handPos)
+        {
+            float centerDist = Vector3.Distance(targetCenter, handPos);
+            if (col == null || col is MeshCollider meshCol && !meshCol.convex)
+                return centerDist;
+
+            try
+            {
+                Vector3 closest = col.ClosestPoint(handPos);
+                float surfaceDist = Vector3.Distance(closest, handPos);
+                return Mathf.Min(centerDist, surfaceDist);
+            }
+            catch
+            {
+                return centerDist;
+            }
         }
 
         private static GameObject ResolveSpriggullRoot(Collider col, out Spriggull agent, out HealthObject health)
