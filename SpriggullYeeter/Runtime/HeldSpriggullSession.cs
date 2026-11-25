@@ -11,8 +11,8 @@ namespace SpriggullYeeter.Runtime
 {
     /// <summary>
     /// Manages a single Spriggull while grabbed and carried by a player:
-    /// completely suspends AI, pathfinding, Walker GameObject, flail, and pecking while held,
-    /// pins physics pose across Update and FixedUpdate, and cleanly restores pre-hold flags.
+    /// disables AI, pathfinding, Walker, flail, beak, and all colliders while held,
+    /// pins physics pose across Update/FixedUpdate/LateUpdate, and cleanly restores pre-hold state.
     /// </summary>
     internal sealed class HeldSpriggullSession
     {
@@ -48,6 +48,8 @@ namespace SpriggullYeeter.Runtime
         private readonly NetworkRigidbody _netRb;
         private readonly FixedImpactor _beakImpactor;
         private readonly Animator _animator;
+        private readonly Collider[] _allColliders;
+        private readonly bool[] _savedColliderEnabled;
 
         private bool _savedAgentEnabled;
         private bool _savedWalkerEnabled;
@@ -89,6 +91,9 @@ namespace SpriggullYeeter.Runtime
             _rootRb = spriggullRoot.GetComponent<Rigidbody>();
             _netRb = spriggullRoot.GetComponent<NetworkRigidbody>();
             _animator = spriggullRoot.GetComponentInChildren<Animator>(true);
+
+            _allColliders = spriggullRoot.GetComponentsInChildren<Collider>(true);
+            _savedColliderEnabled = new bool[_allColliders.Length];
 
             if (agent != null && BeakFieldRef != null)
             {
@@ -184,7 +189,6 @@ namespace SpriggullYeeter.Runtime
             if (!_suspended || !IsValid)
                 return;
 
-            // Keep AI/Walker suppressed in case server logic attempts to re-enable them mid-carry.
             if (Agent != null && NetworkSceneManager.IsServer && Agent.IsEnabled)
             {
                 Agent.CancelCurrentAction();
@@ -198,7 +202,7 @@ namespace SpriggullYeeter.Runtime
         }
 
         /// <summary>
-        /// Restores pre-hold AI/Walker/Rigidbody flags. Must be called both on clean drop AND
+        /// Restores pre-hold AI/Walker/Collider/Rigidbody flags. Must be called both on clean drop AND
         /// immediately prior to RagdollAPI.TriggerRagdoll so RagdollLib snapshots true baseline states.
         /// </summary>
         public void RestorePreHoldState(bool resetMotion)
@@ -217,6 +221,13 @@ namespace SpriggullYeeter.Runtime
                 {
                     _animator.speed = _savedAnimatorSpeed;
                     _savedAnimatorSpeedCaptured = false;
+                }
+
+                for (int i = 0; i < _allColliders.Length; i++)
+                {
+                    Collider col = _allColliders[i];
+                    if (col != null)
+                        col.enabled = _savedColliderEnabled[i];
                 }
 
                 if (_rootRb != null)
@@ -361,6 +372,17 @@ namespace SpriggullYeeter.Runtime
                 _rootRb.useGravity = false;
                 _rootRb.isKinematic = true;
                 _rootRb.detectCollisions = false;
+            }
+
+            // Disable all colliders while held so player hands never physically stick to or push the Spriggull
+            for (int i = 0; i < _allColliders.Length; i++)
+            {
+                Collider col = _allColliders[i];
+                if (col != null)
+                {
+                    _savedColliderEnabled[i] = col.enabled;
+                    col.enabled = false;
+                }
             }
 
             if (_animator != null)

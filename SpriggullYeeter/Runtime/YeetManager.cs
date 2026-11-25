@@ -21,6 +21,7 @@ namespace SpriggullYeeter.Runtime
 
         private readonly Dictionary<int, PlayerYeetHandler> _players = new Dictionary<int, PlayerYeetHandler>();
         private readonly Dictionary<int, AirborneSpriggullTracker> _airborneTrackers = new Dictionary<int, AirborneSpriggullTracker>();
+        private readonly HashSet<int> _heldEntityIds = new HashSet<int>();
         private readonly List<int> _pruneBuffer = new List<int>();
 
         private readonly YeetConfig _config;
@@ -171,14 +172,57 @@ namespace SpriggullYeeter.Runtime
             }
         }
 
-        public bool IsSpriggullHeld(int rootInstanceId)
+        public void LateTickAll()
         {
             foreach (KeyValuePair<int, PlayerYeetHandler> kvp in _players)
             {
-                if (kvp.Value.HeldSpriggullId == rootInstanceId)
+                try
+                {
+                    kvp.Value.LateTick();
+                }
+                catch (Exception ex)
+                {
+                    _log?.Error($"[SpriggullYeeter] Error in LateTickAll: {ex}");
+                }
+            }
+        }
+
+        public void NotifyHoldStarted(int rootInstanceId)
+        {
+            if (rootInstanceId != 0)
+                _heldEntityIds.Add(rootInstanceId);
+        }
+
+        public void NotifyHoldEnded(int rootInstanceId)
+        {
+            if (rootInstanceId != 0)
+                _heldEntityIds.Remove(rootInstanceId);
+        }
+
+        public bool IsSpriggullHeld(int rootInstanceId)
+        {
+            return _heldEntityIds.Contains(rootInstanceId);
+        }
+
+        public bool IsComponentEntityHeld(Component comp)
+        {
+            if (_heldEntityIds.Count == 0 || comp == null)
+                return false;
+
+            int directId = comp.gameObject.GetInstanceID();
+            if (_heldEntityIds.Contains(directId))
+                return true;
+
+            NetworkEntity net = comp as NetworkEntity ?? comp.GetComponentInParent<NetworkEntity>();
+            if (net != null)
+            {
+                NetworkEntity prefabRoot = net.PrefabRoot != null ? net.PrefabRoot : net;
+                if (prefabRoot != null && _heldEntityIds.Contains(prefabRoot.gameObject.GetInstanceID()))
                     return true;
             }
-            return false;
+
+            Transform root = comp.transform.root;
+            return root != null && _heldEntityIds.Contains(root.gameObject.GetInstanceID());
         }
 
         public void RegisterAirborneLaunch(GameObject spriggullRoot, PlayerController thrower, YeetConfigSnapshot cfg)
@@ -239,6 +283,7 @@ namespace SpriggullYeeter.Runtime
                 kvp.Value.Cleanup();
             _airborneTrackers.Clear();
 
+            _heldEntityIds.Clear();
             _pruneBuffer.Clear();
         }
 

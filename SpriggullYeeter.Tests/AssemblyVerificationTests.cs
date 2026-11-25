@@ -124,6 +124,11 @@ namespace SpriggullYeeter.Tests
             }
 
             // 5. Verify Harmony patch targets and private reflected fields.
+            AssertMethodExists(gameAsm, "Alta.Networking.NetworkRigidbody", "ClientUpdate", 0);
+            AssertMethodExists(gameAsm, "Alta.Networking.NetworkRigidbody", "ApplySerializedValues", 1);
+            AssertMethodExists(gameAsm, "Alta.Pathfinding.Walker", "FixedUpdate", 0);
+            AssertMethodExists(gameAsm, "Alta.Intelligence.Agent", "ChangeAction", 0);
+            AssertMethodExists(gameAsm, "Alta.Intelligence.Spriggull", "BeginFlail", 1);
             AssertMethodExists(gameAsm, "HealthObject", "OnKilled", 0);
             AssertMethodExists(gameAsm, "Alta.Networking.NetworkEntity", "OnDestroyedByScene", 1);
             AssertMethodExists(gameAsm, "Alta.Networking.NetworkEntity", "OnDestroy", 0);

@@ -86,6 +86,14 @@ namespace SpriggullYeeter
             _manager.FixedTickAll();
         }
 
+        public override void OnLateUpdate()
+        {
+            if (_abortedIl2Cpp || _manager == null)
+                return;
+
+            _manager.LateTickAll();
+        }
+
         public override void OnSceneWasUnloaded(int buildIndex, string sceneName)
         {
             if (_abortedIl2Cpp)

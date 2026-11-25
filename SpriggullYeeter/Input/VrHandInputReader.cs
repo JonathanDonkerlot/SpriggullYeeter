@@ -5,13 +5,13 @@ using UnityEngine.XR;
 namespace SpriggullYeeter.Input
 {
     /// <summary>
-    /// Reads VR hold-to-grip state cleanly without false positives (never reads GrabStrength),
-    /// supporting both local ControllerInput/ActionsManager and server-replicated HandGestureController.
+    /// Reads strict hold-to-grip state across local VR ControllerInput and server-replicated
+    /// HandGestureController without sticky Interact/ToggleGrab or false GrabStrength triggers.
     /// </summary>
     internal static class VrHandInputReader
     {
-        private const float GripAxisThreshold = 0.65f;
-        private const float FreeModeCurlThreshold = 0.70f;
+        private const float GripAxisThreshold = 0.70f;
+        private const float FreeModeCurlThreshold = 0.75f;
 
         private static readonly AccessTools.FieldRef<HandGestureController, float> GripAxisRef =
             CreateFieldRef<float>("gripAxis");
@@ -69,27 +69,15 @@ namespace SpriggullYeeter.Input
             if (player == null || controller == null)
                 return false;
 
-            // Local VR player: read ATT's bound action/raw input directly and do not fall through
-            // when RawInput is available so releasing Grip guarantees an immediate false.
+            // Local VR player: strictly read RawInput.Grab / RawInput.GrabAxis (no sticky ActionsManager/HardGrab).
             if (controller.PlayerInput != null)
             {
                 try
                 {
-                    ControllerActionsManagerProxy actions = controller.ActionsManager;
-                    if (actions != null)
-                    {
-                        ControllerActionProxy interact = actions[ControllerActionType.Interact];
-                        if (interact != null && interact.IsEnabled && interact.State)
-                            return true;
-                    }
-
                     ControllerInput raw = controller.PlayerInput.RawInput;
                     if (raw != null)
                     {
                         if (raw.Grab != null && raw.Grab.State)
-                            return true;
-
-                        if (raw.HardGrab != null && raw.HardGrab.State)
                             return true;
 
                         return raw.GrabAxis >= GripAxisThreshold;
@@ -174,9 +162,9 @@ namespace SpriggullYeeter.Input
                     float[] skeleton = SkeletonInputRef(gesture);
                     if (skeleton != null && skeleton.Length >= 5)
                     {
-                        float curlAvg = (skeleton[2] + skeleton[3] + skeleton[4]) / 3f;
-                        if (curlAvg >= FreeModeCurlThreshold)
-                            return true;
+                        return skeleton[2] >= FreeModeCurlThreshold &&
+                               skeleton[3] >= FreeModeCurlThreshold &&
+                               skeleton[4] >= FreeModeCurlThreshold;
                     }
                 }
 
