@@ -88,6 +88,12 @@ namespace SpriggullYeeter.Runtime
             }
         }
 
+        public void FixedTick()
+        {
+            if (_stateMachine.State == YeetState.Held && _heldSession != null)
+                _heldSession.SyncPhysicsPose();
+        }
+
         public void AbortHoldIfActive()
         {
             if (_heldSession != null)

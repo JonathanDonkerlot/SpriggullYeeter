@@ -1,24 +1,32 @@
 using HarmonyLib;
+using UnityEngine;
 using UnityEngine.XR;
 
 namespace SpriggullYeeter.Input
 {
     /// <summary>
-    /// Reads VR grip state across ATT's native ControllerInput, replicated HandGestureController,
-    /// and Unity XR InputDevices, plus empty-hand availability and haptic feedback.
+    /// Reads VR hold-to-grip state cleanly without false positives (never reads GrabStrength),
+    /// supporting both local ControllerInput/ActionsManager and server-replicated HandGestureController.
     /// </summary>
     internal static class VrHandInputReader
     {
-        private const float GripAxisThreshold = 0.55f;
+        private const float GripAxisThreshold = 0.65f;
+        private const float FreeModeCurlThreshold = 0.70f;
 
         private static readonly AccessTools.FieldRef<HandGestureController, float> GripAxisRef =
-            CreateGripAxisFieldRef();
+            CreateFieldRef<float>("gripAxis");
 
-        private static AccessTools.FieldRef<HandGestureController, float> CreateGripAxisFieldRef()
+        private static readonly AccessTools.FieldRef<HandGestureController, bool> IsFreeGestureModeRef =
+            CreateFieldRef<bool>("isFreeGestureMode");
+
+        private static readonly AccessTools.FieldRef<HandGestureController, float[]> SkeletonInputRef =
+            CreateFieldRef<float[]>("skeletonInput");
+
+        private static AccessTools.FieldRef<HandGestureController, T> CreateFieldRef<T>(string fieldName)
         {
             try
             {
-                return AccessTools.FieldRefAccess<HandGestureController, float>("gripAxis");
+                return AccessTools.FieldRefAccess<HandGestureController, T>(fieldName);
             }
             catch
             {
@@ -26,7 +34,7 @@ namespace SpriggullYeeter.Input
             }
         }
 
-        public static UnityEngine.Transform GetHandAnchor(Controller controller)
+        public static Transform GetHandAnchor(Controller controller)
         {
             if (controller == null)
                 return null;
@@ -61,19 +69,45 @@ namespace SpriggullYeeter.Input
             if (player == null || controller == null)
                 return false;
 
-            // 1. ATT native ControllerInput (works cleanly with SteamVR/OpenVR, Oculus, and custom bindings)
-            if (TryReadControllerInputGrip(controller))
-                return true;
+            // Local VR player: read ATT's bound action/raw input directly and do not fall through
+            // when RawInput is available so releasing Grip guarantees an immediate false.
+            if (controller.PlayerInput != null)
+            {
+                try
+                {
+                    ControllerActionsManagerProxy actions = controller.ActionsManager;
+                    if (actions != null)
+                    {
+                        ControllerActionProxy interact = actions[ControllerActionType.Interact];
+                        if (interact != null && interact.IsEnabled && interact.State)
+                            return true;
+                    }
 
-            // 2. ATT replicated HandGestureController.gripAxis (works on both client and server)
-            if (TryReadGestureGrip(controller))
-                return true;
+                    ControllerInput raw = controller.PlayerInput.RawInput;
+                    if (raw != null)
+                    {
+                        if (raw.Grab != null && raw.Grab.State)
+                            return true;
 
-            // 3. Unity XR InputDevices fallback for local VR player
-            if (player.IsLocalPlayer && TryReadLocalXrGrip(isLeftHand ? XRNode.LeftHand : XRNode.RightHand))
-                return true;
+                        if (raw.HardGrab != null && raw.HardGrab.State)
+                            return true;
 
-            return false;
+                        return raw.GrabAxis >= GripAxisThreshold;
+                    }
+                }
+                catch
+                {
+                    // Fall through to XR fallback only if ATT input read threw.
+                }
+
+                if (player.IsLocalPlayer)
+                    return TryReadLocalXrGrip(isLeftHand ? XRNode.LeftHand : XRNode.RightHand);
+
+                return false;
+            }
+
+            // Remote player on server: read ATT's replicated HandGestureController state.
+            return TryReadReplicatedGestureGrip(controller);
         }
 
         public static void TryPulseHaptic(
@@ -94,32 +128,6 @@ namespace SpriggullYeeter.Input
             {
                 // Ignore when XR device does not support haptics or is disconnected.
             }
-        }
-
-        private static bool TryReadControllerInputGrip(Controller controller)
-        {
-            try
-            {
-                PlayerInput playerInput = controller.PlayerInput;
-                ControllerInput raw = playerInput != null ? playerInput.RawInput : null;
-                if (raw == null)
-                    return false;
-
-                if (raw.Grab != null && raw.Grab.State)
-                    return true;
-
-                if (raw.HardGrab != null && raw.HardGrab.State)
-                    return true;
-
-                if (raw.GrabAxis >= GripAxisThreshold || raw.GrabStrength >= GripAxisThreshold)
-                    return true;
-            }
-            catch
-            {
-                // Ignore and fall back to gesture/XR reads.
-            }
-
-            return false;
         }
 
         private static bool TryReadLocalXrGrip(XRNode node)
@@ -144,11 +152,8 @@ namespace SpriggullYeeter.Input
             return false;
         }
 
-        private static bool TryReadGestureGrip(Controller controller)
+        private static bool TryReadReplicatedGestureGrip(Controller controller)
         {
-            if (GripAxisRef == null)
-                return false;
-
             try
             {
                 HandGestureController gesture = controller.Hand != null
@@ -164,12 +169,26 @@ namespace SpriggullYeeter.Input
                 if (gesture == null)
                     return false;
 
-                return GripAxisRef(gesture) >= GripAxisThreshold;
+                if (IsFreeGestureModeRef != null && SkeletonInputRef != null && IsFreeGestureModeRef(gesture))
+                {
+                    float[] skeleton = SkeletonInputRef(gesture);
+                    if (skeleton != null && skeleton.Length >= 5)
+                    {
+                        float curlAvg = (skeleton[2] + skeleton[3] + skeleton[4]) / 3f;
+                        if (curlAvg >= FreeModeCurlThreshold)
+                            return true;
+                    }
+                }
+
+                if (GripAxisRef != null && GripAxisRef(gesture) >= GripAxisThreshold)
+                    return true;
             }
             catch
             {
                 return false;
             }
+
+            return false;
         }
     }
 }

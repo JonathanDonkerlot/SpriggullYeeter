@@ -49,7 +49,7 @@ namespace SpriggullYeeter
 
             YeetConfigSnapshot snap = _config.Snapshot;
             LoggerInstance.Msg(
-                $"[SpriggullYeeter] v1.0.1 Initialized (RagdollLib Integration) | " +
+                $"[SpriggullYeeter] v1.0.2 Initialized (RagdollLib Integration) | " +
                 $"RequireTwoHands={snap.RequireTwoHands}, GrabRadius={snap.GrabRadius:F2}m, " +
                 $"MaxSep={snap.MaxHandSeparation:F2}m, YeetMult={snap.YeetForceMultiplier:F2}x, " +
                 $"RagdollDuration={snap.RagdollDurationSeconds:F1}s, ImpactDmg={snap.EnableImpactDamage}");
@@ -76,6 +76,14 @@ namespace SpriggullYeeter
             }
 
             _manager.TickAll();
+        }
+
+        public override void OnFixedUpdate()
+        {
+            if (_abortedIl2Cpp || _manager == null)
+                return;
+
+            _manager.FixedTickAll();
         }
 
         public override void OnSceneWasUnloaded(int buildIndex, string sceneName)

@@ -1,4 +1,3 @@
-using System;
 using Alta.Impact;
 using Alta.Intelligence;
 using Alta.Networking;
@@ -12,8 +11,8 @@ namespace SpriggullYeeter.Runtime
 {
     /// <summary>
     /// Manages a single Spriggull while grabbed and carried by a player:
-    /// suspends AI/pecking, positions the creature at the hand midpoint with squirm/squawks/haptics,
-    /// and cleanly restores pre-hold component flags right before RagdollLib takes over.
+    /// completely suspends AI, pathfinding, Walker GameObject, flail, and pecking while held,
+    /// pins physics pose across Update and FixedUpdate, and cleanly restores pre-hold flags.
     /// </summary>
     internal sealed class HeldSpriggullSession
     {
@@ -44,6 +43,7 @@ namespace SpriggullYeeter.Runtime
         private readonly Walker _walker;
         private readonly Navigator _navigator;
         private readonly Director _director;
+        private readonly SpriggullFlail _flail;
         private readonly Rigidbody _rootRb;
         private readonly NetworkRigidbody _netRb;
         private readonly FixedImpactor _beakImpactor;
@@ -51,14 +51,21 @@ namespace SpriggullYeeter.Runtime
 
         private bool _savedAgentEnabled;
         private bool _savedWalkerEnabled;
+        private bool _savedWalkerGoActive;
+        private bool _savedNavigatorEnabled;
+        private bool _savedDirectorEnabled;
+        private bool _savedFlailEnabled;
         private bool _savedBeakEnabled;
         private bool _savedRootRbKinematic;
         private bool _savedRootRbDetectCollisions;
+        private bool _savedRootRbUseGravity;
         private bool _savedNetRbSuspended;
         private bool _savedAnimatorSpeedCaptured;
         private float _savedAnimatorSpeed = 1f;
         private bool _suspended;
 
+        private Vector3 _lastDesiredPos;
+        private Quaternion _lastDesiredRot;
         private float _holdStartTime;
         private float _nextSquawkTime;
         private float _nextHapticTime;
@@ -78,6 +85,7 @@ namespace SpriggullYeeter.Runtime
             _walker = spriggullRoot.GetComponentInChildren<Walker>(true);
             _navigator = spriggullRoot.GetComponentInChildren<Navigator>(true);
             _director = spriggullRoot.GetComponentInChildren<Director>(true);
+            _flail = spriggullRoot.GetComponentInChildren<SpriggullFlail>(true);
             _rootRb = spriggullRoot.GetComponent<Rigidbody>();
             _netRb = spriggullRoot.GetComponent<NetworkRigidbody>();
             _animator = spriggullRoot.GetComponentInChildren<Animator>(true);
@@ -109,6 +117,9 @@ namespace SpriggullYeeter.Runtime
             _holdStartTime = Time.unscaledTime;
             _nextSquawkTime = _holdStartTime + 0.15f;
             _nextHapticTime = _holdStartTime;
+
+            _lastDesiredPos = SpriggullRoot.transform.position;
+            _lastDesiredRot = SpriggullRoot.transform.rotation;
 
             SuspendForCarry();
 
@@ -148,16 +159,11 @@ namespace SpriggullYeeter.Runtime
             Quaternion baseRot = Quaternion.LookRotation(flatForward.normalized, Vector3.up);
             Quaternion desiredRot = baseRot * Quaternion.Euler(8f, squirmYaw, squirmRoll);
 
-            float t = Mathf.Clamp01(Time.deltaTime * 24f);
-            Vector3 smoothedPos = Vector3.Lerp(SpriggullRoot.transform.position, desiredPos, t);
-            Quaternion smoothedRot = Quaternion.Slerp(SpriggullRoot.transform.rotation, desiredRot, t);
+            float t = Mathf.Clamp01(Time.deltaTime * 28f);
+            _lastDesiredPos = Vector3.Lerp(SpriggullRoot.transform.position, desiredPos, t);
+            _lastDesiredRot = Quaternion.Slerp(SpriggullRoot.transform.rotation, desiredRot, t);
 
-            SpriggullRoot.transform.SetPositionAndRotation(smoothedPos, smoothedRot);
-            if (_rootRb != null)
-            {
-                _rootRb.position = smoothedPos;
-                _rootRb.rotation = smoothedRot;
-            }
+            ApplyPinnedPose();
 
             if (now >= _nextHapticTime)
             {
@@ -171,6 +177,24 @@ namespace SpriggullYeeter.Runtime
                 _nextSquawkTime = now + SquawkIntervalSeconds;
                 SpriggullFeedback.PlaySquawk(SpriggullRoot, isLaunch: false);
             }
+        }
+
+        public void SyncPhysicsPose()
+        {
+            if (!_suspended || !IsValid)
+                return;
+
+            // Keep AI/Walker suppressed in case server logic attempts to re-enable them mid-carry.
+            if (Agent != null && NetworkSceneManager.IsServer && Agent.IsEnabled)
+            {
+                Agent.CancelCurrentAction();
+                Agent.IsEnabled = false;
+            }
+
+            if (_walker != null && _walker.gameObject.activeSelf)
+                _walker.gameObject.SetActive(false);
+
+            ApplyPinnedPose();
         }
 
         /// <summary>
@@ -195,11 +219,9 @@ namespace SpriggullYeeter.Runtime
                     _savedAnimatorSpeedCaptured = false;
                 }
 
-                if (_beakImpactor != null)
-                    _beakImpactor.enabled = _savedBeakEnabled;
-
                 if (_rootRb != null)
                 {
+                    _rootRb.useGravity = _savedRootRbUseGravity;
                     _rootRb.isKinematic = _savedRootRbKinematic;
                     _rootRb.detectCollisions = _savedRootRbDetectCollisions;
                     if (resetMotion && !_savedRootRbKinematic)
@@ -212,15 +234,30 @@ namespace SpriggullYeeter.Runtime
                 if (_netRb != null)
                     _netRb.isSuspended = _savedNetRbSuspended;
 
+                if (_flail != null)
+                    _flail.enabled = _savedFlailEnabled;
+
+                if (_beakImpactor != null)
+                    _beakImpactor.enabled = _savedBeakEnabled;
+
                 if (_walker != null)
                 {
+                    if (_savedWalkerGoActive && !_walker.gameObject.activeSelf)
+                        _walker.gameObject.SetActive(true);
                     _walker.enabled = _savedWalkerEnabled;
                     if (NetworkSceneManager.IsServer)
                         _walker.ClearBlocked();
                 }
 
-                if (_navigator != null && NetworkSceneManager.IsServer)
-                    _navigator.ResetPosition();
+                if (_navigator != null)
+                {
+                    _navigator.enabled = _savedNavigatorEnabled;
+                    if (NetworkSceneManager.IsServer)
+                        _navigator.ResetPosition();
+                }
+
+                if (_director != null)
+                    _director.enabled = _savedDirectorEnabled;
 
                 if (Agent != null && NetworkSceneManager.IsServer)
                     Agent.IsEnabled = _savedAgentEnabled;
@@ -228,6 +265,24 @@ namespace SpriggullYeeter.Runtime
             catch
             {
                 // Ignore restoration errors if entity is mid-destroy.
+            }
+        }
+
+        private void ApplyPinnedPose()
+        {
+            SpriggullRoot.transform.SetPositionAndRotation(_lastDesiredPos, _lastDesiredRot);
+
+            if (_rootRb != null)
+            {
+                if (!_rootRb.isKinematic)
+                {
+                    _rootRb.velocity = Vector3.zero;
+                    _rootRb.angularVelocity = Vector3.zero;
+                    _rootRb.isKinematic = true;
+                }
+
+                _rootRb.position = _lastDesiredPos;
+                _rootRb.rotation = _lastDesiredRot;
             }
         }
 
@@ -242,22 +297,43 @@ namespace SpriggullYeeter.Runtime
             {
                 _savedAgentEnabled = Agent.IsEnabled;
                 if (NetworkSceneManager.IsServer)
+                {
+                    Agent.CancelCurrentAction();
                     Agent.IsEnabled = false;
+                }
             }
 
             if (_walker != null)
             {
                 _savedWalkerEnabled = _walker.enabled;
+                _savedWalkerGoActive = _walker.gameObject.activeSelf;
                 if (NetworkSceneManager.IsServer)
                     _walker.StopNormalizedMove();
                 _walker.enabled = false;
+                _walker.gameObject.SetActive(false);
             }
 
-            if (_navigator != null && NetworkSceneManager.IsServer)
-                _navigator.Stop();
+            if (_navigator != null)
+            {
+                _savedNavigatorEnabled = _navigator.enabled;
+                if (NetworkSceneManager.IsServer)
+                    _navigator.Stop();
+                _navigator.enabled = false;
+            }
 
-            if (_director != null && NetworkSceneManager.IsServer)
-                _director.Stop();
+            if (_director != null)
+            {
+                _savedDirectorEnabled = _director.enabled;
+                if (NetworkSceneManager.IsServer)
+                    _director.Stop();
+                _director.enabled = false;
+            }
+
+            if (_flail != null)
+            {
+                _savedFlailEnabled = _flail.enabled;
+                _flail.enabled = false;
+            }
 
             if (_beakImpactor != null)
             {
@@ -276,11 +352,13 @@ namespace SpriggullYeeter.Runtime
             {
                 _savedRootRbKinematic = _rootRb.isKinematic;
                 _savedRootRbDetectCollisions = _rootRb.detectCollisions;
+                _savedRootRbUseGravity = _rootRb.useGravity;
                 if (!_rootRb.isKinematic)
                 {
                     _rootRb.velocity = Vector3.zero;
                     _rootRb.angularVelocity = Vector3.zero;
                 }
+                _rootRb.useGravity = false;
                 _rootRb.isKinematic = true;
                 _rootRb.detectCollisions = false;
             }

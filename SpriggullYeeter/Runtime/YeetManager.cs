@@ -156,6 +156,21 @@ namespace SpriggullYeeter.Runtime
             }
         }
 
+        public void FixedTickAll()
+        {
+            foreach (KeyValuePair<int, PlayerYeetHandler> kvp in _players)
+            {
+                try
+                {
+                    kvp.Value.FixedTick();
+                }
+                catch (Exception ex)
+                {
+                    _log?.Error($"[SpriggullYeeter] Error in FixedTickAll: {ex}");
+                }
+            }
+        }
+
         public bool IsSpriggullHeld(int rootInstanceId)
         {
             foreach (KeyValuePair<int, PlayerYeetHandler> kvp in _players)
